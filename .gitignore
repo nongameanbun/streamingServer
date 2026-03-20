@@ -1,0 +1,16 @@
+build/
+external/
+captured_debug.ppm
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.vs/
+*.user
