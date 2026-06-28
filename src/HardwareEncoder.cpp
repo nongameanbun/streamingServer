@@ -211,15 +211,23 @@ bool HardwareEncoder::configureEncoder() {
         logInfo("NVENC encoder configured for ultra-low latency");
         
     } else if (encoderType_ == HWEncoderType::QSV) {
-        // Intel QSV - balanced quality/latency settings
-        av_opt_set(codecCtx_->priv_data, "preset", "medium", 0);  // Changed from veryfast for better quality
+        // Intel QSV - CBR for smooth, evenly-sized frames (reduces stutter)
+        av_opt_set(codecCtx_->priv_data, "preset", "veryfast", 0);  // Lower encode latency than "medium"
         av_opt_set(codecCtx_->priv_data, "profile", "baseline", 0); // Force baseline
         codecCtx_->profile = 578; // Constrained Baseline
         codecCtx_->level = 31; // Level 3.1
-        
-        // Quality settings
-        av_opt_set(codecCtx_->priv_data, "global_quality", "18", 0);  // Lower = sharper (18-28 range)
-        
+
+        // Rate control: CBR with a bounded HRD/VBV buffer.
+        // rc_max_rate == bit_rate selects CBR in the FFmpeg QSV wrapper; the ~1s
+        // buffer spreads large (key)frames over time so the network sees an even
+        // stream instead of per-GOP bursts -> far less "hitching".
+        // NOTE: deliberately NOT setting global_quality - it switches QSV into ICQ
+        // (constant-quality) mode, which ignores the bitrate target and produces
+        // spiky frame sizes that burst the link and cause stutter.
+        codecCtx_->bit_rate = config_.bitrate;
+        codecCtx_->rc_max_rate = config_.bitrate;
+        codecCtx_->rc_buffer_size = static_cast<int>(config_.bitrate);  // ~1 second
+
         // Low latency settings (but not extreme)
         av_opt_set(codecCtx_->priv_data, "look_ahead", "0", 0);
         av_opt_set(codecCtx_->priv_data, "look_ahead_depth", "0", 0);
@@ -235,8 +243,9 @@ bool HardwareEncoder::configureEncoder() {
         // Force IDR frames (VERY IMPORTANT for browser rendering)
         av_opt_set(codecCtx_->priv_data, "forced_idr", "1", 0);
         av_opt_set(codecCtx_->priv_data, "extbrc", "0", 0); // Use standard BRC for better IDR control
-        
-        logInfo("QuickSync encoder configured for ultra-low latency (Baseline)");
+
+        logInfo("QuickSync encoder configured: CBR " +
+                std::to_string(config_.bitrate / 1000000) + " Mbps (Baseline)");
         
     } else if (encoderType_ == HWEncoderType::AMF) {
         // AMD AMF ultra-low latency settings

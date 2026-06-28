@@ -14,6 +14,7 @@
 #include "StreamingPipeline.h"
 #include <iostream>
 #include <csignal>
+#include <nlohmann/json.hpp>
 
 using namespace ull_streamer;
 
@@ -36,6 +37,9 @@ void printUsage(const char* programName) {
               << "  --y <px>           Capture Y offset (default: 0)\n"
               << "  --width <px>       Capture width (default: 1366)\n"
               << "  --height <px>      Capture height (default: 768)\n"
+              << "  --window <title>   Capture a specific window by title substring\n"
+              << "                     (no monitor required; target must run windowed)\n"
+              << "  --window-full      With --window, capture the full window incl. borders\n"
               << "  --fps <n>          Target FPS (default: 60)\n"
               << "  --bitrate <kbps>   Bitrate in kbps (default: 8000)\n"
               << "  --gop <n>          GOP size (default: 30)\n"
@@ -77,6 +81,12 @@ StreamConfig parseArguments(int argc, char* argv[]) {
         else if (arg == "--height" && i + 1 < argc) {
             config.height = std::stoi(argv[++i]);
         }
+        else if (arg == "--window" && i + 1 < argc) {
+            config.windowTitle = argv[++i];
+        }
+        else if (arg == "--window-full") {
+            config.windowClientOnly = false;
+        }
         else if (arg == "--fps" && i + 1 < argc) {
             config.targetFPS = std::stoi(argv[++i]);
         }
@@ -100,34 +110,66 @@ StreamConfig parseArguments(int argc, char* argv[]) {
     return config;
 }
 
+// stdin command thread: one JSON object per line
+// Commands: {"cmd":"set_bitrate","value":4000}  (kbps)
+//           {"cmd":"set_fps","value":30}
+//           {"cmd":"stats"}
+//           {"cmd":"quit"}
+void runCommandThread(StreamingPipeline& pipeline, std::atomic<bool>& running) {
+    std::string line;
+    while (running && std::getline(std::cin, line)) {
+        if (line.empty()) continue;
+        try {
+            auto j = nlohmann::json::parse(line);
+            std::string cmd = j.value("cmd", "");
+            if (cmd == "set_bitrate") {
+                pipeline.updateBitrate(j.at("value").get<uint32_t>() * 1000);
+                std::cout << R"({"ok":true})" << '\n' << std::flush;
+            } else if (cmd == "set_fps") {
+                pipeline.setFps(j.at("value").get<uint32_t>());
+                std::cout << R"({"ok":true})" << '\n' << std::flush;
+            } else if (cmd == "stats") {
+                std::cout << pipeline.getStatsJson() << '\n' << std::flush;
+            } else if (cmd == "quit") {
+                running = false;
+                break;
+            }
+        } catch (...) {
+            std::cout << R"({"ok":false,"error":"parse error"})" << '\n' << std::flush;
+        }
+    }
+    running = false;
+}
+
 int main(int argc, char* argv[]) {
     // Parse arguments
     StreamConfig config = parseArguments(argc, argv);
-    
+
     // Register signal handlers
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
-    
+
     // Initialize pipeline
     StreamingPipeline pipeline;
     g_pipeline = &pipeline;
-    
+
     if (!pipeline.initialize(config)) {
         return 1;
     }
-    
+
+    // Launch stdin command thread (enables Python-side runtime control)
+    std::thread cmdThread(runCommandThread, std::ref(pipeline), std::ref(g_running));
+    cmdThread.detach();
+
     // Main loop
     while (g_running) {
-        // Check state
         auto state = pipeline.getState();
-        
         if (state == PipelineState::Error) {
             break;
         }
-        
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    
+
     // Cleanup
     pipeline.shutdown();
     return 0;

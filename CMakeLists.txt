@@ -77,6 +77,14 @@ set(HEADERS
 # Executable
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
 
+# Logging: logInfo() in StreamCommon.h is gated behind VERBOSE_LOG. Without this,
+# the Release build emits ONLY [ERROR] lines (info/state/encoder logs are compiled
+# out), leaving main.py's /streamer/logs nearly empty. Default ON for diagnosability.
+option(VERBOSE_LOG "Enable [INFO] logging from the streamer" ON)
+if(VERBOSE_LOG)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE VERBOSE_LOG)
+endif()
+
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${FFMPEG_INCLUDE_DIRS}
@@ -93,6 +101,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     # Windows libraries
     d3d11
     dxgi
+    gdi32
+    user32
     ws2_32
 )
 

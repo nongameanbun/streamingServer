@@ -1,16 +1,38 @@
-build/
-external/
-captured_debug.ppm
-.env
+# ===== Python =====
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
+*.py[cod]
+
+# ===== 환경변수 / 시크릿 (.env.example 템플릿은 추적) =====
+.env
+.env.*
+!.env.example
+!env.example
+
+# ===== 가상환경 =====
+.venv/
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
+.Python
+
+# ===== 로그 / DB =====
+*.log
+*.sqlite3
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
 .vs/
 *.user
+.DS_Store
+
+# ===== 모델 가중치 / 캐시 =====
+*.pkl
+*.pt
+
+# ===== streaming 전용 (C++ 빌드) =====
+build/
+external/
+captured_debug.ppm

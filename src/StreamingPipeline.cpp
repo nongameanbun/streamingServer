@@ -1,9 +1,11 @@
 #include "StreamingPipeline.h"
+#include <nlohmann/json.hpp>
 
 namespace ull_streamer {
 
-StreamingPipeline::StreamingPipeline() 
-    : frameQueue_(2)  // Max 2 frames buffer (Ultra Low Latency)
+StreamingPipeline::StreamingPipeline()
+    : frameQueue_(2),
+      alive_(std::make_shared<std::atomic<bool>>(true))
 {
 }
 
@@ -128,6 +130,7 @@ void StreamingPipeline::stop() {
 }
 
 void StreamingPipeline::shutdown() {
+    *alive_ = false;  // Signal all detached threads to abort
     stop();
     
     if (signalingClient_) {
@@ -294,8 +297,27 @@ StreamingStats StreamingPipeline::getStats() const {
 
 void StreamingPipeline::updateBitrate(uint32_t bitrate) {
     config_.bitrate = bitrate;
-    // TODO: Implement runtime bitrate update
-    logInfo("Bitrate updated to " + std::to_string(bitrate / 1000000) + " Mbps");
+    logInfo("Bitrate updated to " + std::to_string(bitrate / 1000) + " kbps");
+}
+
+void StreamingPipeline::setFps(uint32_t fps) {
+    config_.targetFPS = fps;
+    logInfo("FPS updated to " + std::to_string(fps));
+}
+
+std::string StreamingPipeline::getStatsJson() const {
+    auto s = getStats();
+    nlohmann::json j;
+    j["state"]          = static_cast<int>(state_.load());
+    j["fps"]            = s.currentFps;
+    j["latency_ms"]     = s.avgLatencyMs;
+    j["bitrate_mbps"]   = s.currentBitrateMbps;
+    j["captured"]       = s.capturedFrames;
+    j["encoded"]        = s.encodedFrames;
+    j["dropped"]        = s.droppedFrames;
+    j["sent_packets"]   = s.sentPackets;
+    j["sent_bytes"]     = s.sentBytes;
+    return j.dump();
 }
 
 
@@ -383,16 +405,15 @@ void StreamingPipeline::onPeerJoined(const std::string& peerId) {
     if (webrtcManager_) {
         webrtcManager_->createOffer();
         
-        // Start 3-second watchdog timer for auto-reconnect
-        std::thread([this, peerId]() {
+        // 3-second watchdog: alive_ guard prevents UAF if pipeline is destroyed
+        auto alive = alive_;
+        std::thread([this, peerId, alive]() {
             std::this_thread::sleep_for(std::chrono::seconds(3));
-            
-            // Check if still not connected after 3 seconds
-            if (state_ != PipelineState::Streaming && 
-                remotePeerId_ == peerId && 
-                webrtcManager_ && 
+            if (!*alive) return;
+            if (state_ != PipelineState::Streaming &&
+                remotePeerId_ == peerId &&
+                webrtcManager_ &&
                 !webrtcManager_->isConnected()) {
-                
                 logInfo("Connection timeout after 3s - auto-retrying offer...");
                 webrtcManager_->createOffer();
             }
@@ -413,22 +434,24 @@ void StreamingPipeline::onPeerLeft(const std::string& peerId) {
             stop();
         }
         
-        // Async WebRTC re-initialization to prevent race condition
-        std::thread([this]() {
-            // Add delay to let any pending operations complete
+        // Async WebRTC re-init: alive_ guard prevents UAF; encoder_ null-checked
+        auto alive = alive_;
+        std::thread([this, alive]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            
-            if (webrtcManager_) {
-                logInfo("Re-initializing WebRTC for next connection...");
-                webrtcManager_->shutdown();
-                
-                // Small delay after shutdown
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                
-                webrtcManager_->initialize(config_, this);
-                webrtcManager_->setVideoExtraData(encoder_->getExtraData());
-                logInfo("WebRTC ready for new connection");
-            }
+            if (!*alive) return;
+            try {
+                if (webrtcManager_) {
+                    logInfo("Re-initializing WebRTC for next connection...");
+                    webrtcManager_->shutdown();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    if (!*alive) return;
+                    webrtcManager_->initialize(config_, this);
+                    if (encoder_) {
+                        webrtcManager_->setVideoExtraData(encoder_->getExtraData());
+                    }
+                    logInfo("WebRTC ready for new connection");
+                }
+            } catch (...) {}
         }).detach();
     }
 }
@@ -456,14 +479,16 @@ void StreamingPipeline::onCandidate(const std::string& peerId, const IceCandidat
 }
 
 void StreamingPipeline::requestKeyFrame() {
-    // Burst strategy: Send multiple keyframes to ensure client receives one
-    std::thread([this]() {
-        for (int i = 0; i < 5; i++) {
+    // Burst: 2 keyframes 250ms apart — enough for reliable delivery
+    auto alive = alive_;
+    std::thread([this, alive]() {
+        for (int i = 0; i < 2; i++) {
+            if (!*alive) return;
             if (encoder_) {
-                logInfo("Pipeline: Requesting IDR frame (Burst " + std::to_string(i+1) + "/5)");
+                logInfo("Pipeline: Requesting IDR frame (" + std::to_string(i+1) + "/2)");
                 encoder_->forceKeyFrame();
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            if (i < 1) std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
     }).detach();
 }

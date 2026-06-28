@@ -128,12 +128,15 @@ private:
     std::shared_ptr<rtc::RtpPacketizationConfig> rtpConfig_;
     std::shared_ptr<rtc::H264RtpPacketizer> h264Packetizer_;
     std::shared_ptr<rtc::RtcpSrReporter> rtcpSrReporter_;
+    std::shared_ptr<rtc::RtcpNackResponder> nackResponder_;  // retransmit lost packets on NACK
+    std::shared_ptr<rtc::PliHandler> pliHandler_;            // force IDR on receiver PLI/FIR
     
     // RTP configuration
     uint32_t videoSSRC_ = 1;
     uint16_t sequenceNumber_ = 0;
     uint32_t rtpTimestamp_ = 0;
     uint32_t timestampIncrement_ = 0;
+    int64_t  baseTimestampUs_ = 0;   // captureTimestamp of first sent frame
     
     // Video extra data (SPS/PPS)
     std::vector<uint8_t> sps_;

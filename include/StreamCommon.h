@@ -47,6 +47,13 @@ struct StreamConfig {
     uint32_t captureY = 0;            // Y offset for region capture
     uint32_t width = 1366;            // Capture width (original)
     uint32_t height = 768;            // Capture height (original)
+
+    // Window capture (no monitor required).
+    // When windowTitle is non-empty, capture a specific window via GDI PrintWindow
+    // instead of DXGI Desktop Duplication. This works even with no display connected
+    // (e.g. behind an HDMI switch routed to another PC). The target must run windowed.
+    std::string windowTitle = "";     // Case-insensitive substring of the target window title
+    bool windowClientOnly = true;     // Capture client area only (exclude title bar / borders)
     
     // Framerate
     uint32_t targetFPS = 30;          // 30fps for stable encoding on i5-4690
@@ -200,15 +207,19 @@ inline int64_t getCurrentTimestampUs() {
 }
 
 inline void logInfo(const std::string& msg) {
-    // Disabled for release
+#ifdef VERBOSE_LOG
+    std::cout << "[INFO] " << msg << '\n';
+#endif
 }
 
 inline void logError(const std::string& msg) {
-    // Disabled for release
+    std::cerr << "[ERROR] " << msg << '\n';
 }
 
 inline void logDebug(const std::string& msg) {
-    // Disabled for release
+#ifdef _DEBUG
+    std::cout << "[DEBUG] " << msg << '\n';
+#endif
 }
 
 // ============================================================================

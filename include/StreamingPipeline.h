@@ -94,10 +94,16 @@ public:
     StreamingStats getStats() const;
     
     /**
-     * @brief Update settings (runtime)
+     * @brief Update settings (runtime — no restart needed)
      */
     void updateBitrate(uint32_t bitrate);
+    void setFps(uint32_t fps);
     void requestKeyFrame();
+
+    /**
+     * @brief JSON stats snapshot for stdin command interface
+     */
+    std::string getStatsJson() const;
 
 private:
     // WebRTCCallback implementation
@@ -151,6 +157,9 @@ private:
     std::chrono::high_resolution_clock::time_point lastFpsTime_;
     double currentFps_ = 0.0;
     double avgLatencyMs_ = 0.0;
+
+    // Cancel token — detached threads capture a copy; check before touching *this
+    std::shared_ptr<std::atomic<bool>> alive_;
 };
 
 } // namespace ull_streamer

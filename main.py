@@ -382,8 +382,10 @@ class StreamerManager:
         y = kwargs.get("y", 30)
         width = kwargs.get("width", 1366)
         height = kwargs.get("height", 768)
-        fps = kwargs.get("fps", 60)
-        bitrate = kwargs.get("bitrate", 40000)  # 40 Mbps for maximum sharpness
+        fps = kwargs.get("fps", 30)
+        bitrate = kwargs.get("bitrate", 12000)  # 12 Mbps CBR (lower bursts -> less stutter; raise if link allows)
+        window = kwargs.get("window")            # 특정 창 캡처 (모니터 미연결 시에도 동작)
+        window_full = kwargs.get("window_full", False)
 
         self.current_params = {
             "x": x,
@@ -391,7 +393,9 @@ class StreamerManager:
             "width": width,
             "height": height,
             "fps": fps,
-            "bitrate": bitrate
+            "bitrate": bitrate,
+            "window": window,
+            "window_full": window_full
         }
 
         args.extend(["--x", str(x)])
@@ -400,6 +404,12 @@ class StreamerManager:
         args.extend(["--height", str(height)])
         args.extend(["--fps", str(fps)])
         args.extend(["--bitrate", str(bitrate)])
+
+        # 창 캡처 모드: --window 지정 시 DXGI 대신 GDI 창 캡처 사용 (모니터 불필요)
+        if window:
+            args.extend(["--window", str(window)])
+            if window_full:
+                args.append("--window-full")
         
         # TURN 서버 설정 추가
         turn_url = os.environ.get("TURN_SERVER_URL")
@@ -766,12 +776,14 @@ async def start_streamer(
     y: int = 30,
     width: int = 1366,
     height: int = 768,
-    fps: int = 60,
-    bitrate: int = 8000
+    fps: int = 30,
+    bitrate: int = 12000,
+    window: Optional[str] = None,
+    window_full: bool = False
 ):
     """
     스트리머 시작 (영역 캡처 지원)
-    
+
     - room_id: 참가할 룸 ID
     - x: 캡처 영역 X 오프셋
     - y: 캡처 영역 Y 오프셋
@@ -779,6 +791,8 @@ async def start_streamer(
     - height: 캡처 높이
     - fps: 목표 프레임레이트
     - bitrate: 비트레이트 (kbps)
+    - window: 특정 창 제목(부분 일치)을 캡처. 지정 시 모니터(HDMI) 미연결 상태에서도 동작
+    - window_full: window와 함께 사용 시 테두리 포함 전체 창 캡처 (기본: 클라이언트 영역만)
     """
     result = await streamer_manager.start(
         room_id=room_id,
@@ -787,7 +801,9 @@ async def start_streamer(
         width=width,
         height=height,
         fps=fps,
-        bitrate=bitrate
+        bitrate=bitrate,
+        window=window,
+        window_full=window_full
     )
     
     if result["status"] == "error":

@@ -71,19 +71,39 @@ private:
     bool initializeDesktopDuplication();
     bool createStagingTexture();
     void releaseFrame();
-    
+
+    // Window capture (GDI PrintWindow) path - works without an active display output
+    bool initializeWindowCapture();
+    bool captureFrameWindow(std::shared_ptr<CapturedFrame>& frame);
+    bool ensureGdiBuffers(int srcW, int srcH);
+    static HWND findWindowByTitle(const std::string& title);
+    void releaseGdiResources();
+
     // D3D11 resources
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
     ComPtr<IDXGIOutputDuplication> desktopDuplication_;
     ComPtr<ID3D11Texture2D> stagingTexture_;
     ComPtr<ID3D11Texture2D> lastTexture_;
-    
+
+    // Window capture resources (used when useWindowCapture_ is true)
+    bool useWindowCapture_ = false;
+    std::string windowTitle_;
+    bool windowClientOnly_ = true;
+    HWND targetWindow_ = nullptr;
+    HDC srcDC_ = nullptr;             // memory DC for PrintWindow (window-sized)
+    HBITMAP srcBmp_ = nullptr;
+    int srcW_ = 0;
+    int srcH_ = 0;
+    HDC dstDC_ = nullptr;             // memory DC for scaled output (config-sized)
+    HBITMAP dstBmp_ = nullptr;
+    void* dstBits_ = nullptr;         // direct pointer into dst DIB section (BGRA, top-down)
+
     // Configuration
     StreamConfig config_;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
-    
+
     // State
     bool initialized_ = false;
     bool frameAcquired_ = false;

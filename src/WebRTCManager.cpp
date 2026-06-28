@@ -170,7 +170,17 @@ void WebRTCManager::setupVideoTrack() {
     // profile-level-id=42e01f matches Constrained Baseline Profile, Level 3.1.
     std::string fmtp = "profile-level-id=42e01f;packetization-mode=1";
     videoDescription.addH264Codec(96, fmtp);
-    
+
+    // Advertise the RTCP feedback we actually implement so the receiver uses it:
+    //  - "nack"     : receiver reports lost packets -> we retransmit (RtcpNackResponder)
+    //  - "nack pli" : receiver requests a keyframe on unrecoverable loss -> PliHandler
+    // Without these, one lost packet corrupts the stream until the next periodic IDR
+    // (~GOP seconds), which is exactly the occasional "hitching" being reported.
+    if (auto *map = videoDescription.rtpMap(96)) {
+        map->addFeedback("nack");
+        map->addFeedback("nack pli");
+    }
+
     // SSRC configuration
     videoDescription.addSSRC(videoSSRC_, "video-stream");
     
@@ -199,10 +209,26 @@ void WebRTCManager::setupVideoTrack() {
     
     // Create RTCP SR Reporter
     rtcpSrReporter_ = std::make_shared<rtc::RtcpSrReporter>(rtpConfig_);
-    
-    // Set up handler chain: rtcpSrReporter -> h264Packetizer
+
+    // Retransmit recently-sent RTP packets when the receiver NACKs them.
+    nackResponder_ = std::make_shared<rtc::RtcpNackResponder>();
+
+    // When the receiver sends PLI/FIR (e.g. after unrecoverable loss or on join),
+    // force an IDR immediately instead of waiting for the next periodic keyframe.
+    pliHandler_ = std::make_shared<rtc::PliHandler>([this]() {
+        if (callback_) {
+            callback_->onKeyFrameRequest();
+        }
+    });
+
+    // Handler chain (head = rtcpSrReporter, kept as-is to preserve the working
+    // outgoing path). Packetizer runs before the loss-recovery handlers on
+    // outgoing, so the NACK responder caches the final RTP packets; both NACK and
+    // PLI handlers see incoming RTCP.
     rtcpSrReporter_->addToChain(h264Packetizer_);
-    
+    rtcpSrReporter_->addToChain(nackResponder_);
+    rtcpSrReporter_->addToChain(pliHandler_);
+
     // Set media handler
     videoTrack_->setMediaHandler(rtcpSrReporter_);
     
@@ -251,6 +277,8 @@ bool WebRTCManager::createOffer() {
         }
         h264Packetizer_.reset();
         rtcpSrReporter_.reset();
+        nackResponder_.reset();
+        pliHandler_.reset();
         rtpConfig_.reset();
         
         // Clean up old PC
@@ -266,8 +294,9 @@ bool WebRTCManager::createOffer() {
         // Re-enable state callbacks
         isRecreating_ = false;
         
-        // Reset keyframe flag
+        // Reset keyframe flag and PTS base for new connection
         sentKeyframe_ = false;
+        baseTimestampUs_ = 0;
         
         state_ = WebRTCState::Connecting;
         
@@ -549,12 +578,11 @@ bool WebRTCManager::sendVideoPacket(const std::shared_ptr<EncodedPacket>& packet
     // Request RTCP SR periodically
     rtcpSrReporter_->setNeedsToReport();
     
-    // Set timestamp
-    auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-    rtpConfig_->timestamp = rtpConfig_->startTimestamp + 
-        static_cast<uint32_t>(elapsedUs * rtpConfig_->clockRate / 1000000);
+    // Use captureTimestamp for PTS — avoids encoding-latency jitter in RTP timestamps
+    if (baseTimestampUs_ == 0) baseTimestampUs_ = packet->captureTimestamp;
+    int64_t relUs = packet->captureTimestamp - baseTimestampUs_;
+    rtpConfig_->timestamp = rtpConfig_->startTimestamp +
+        static_cast<uint32_t>((uint64_t)relUs * rtpConfig_->clockRate / 1000000ULL);
     
     try {
         // For keyframes, ensure SPS/PPS are present
