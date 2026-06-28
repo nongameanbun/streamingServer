@@ -33,6 +33,8 @@ venv.bak/
 *.pt
 
 # ===== streaming 전용 (C++ 빌드) =====
-build/
+# build 산출물은 무시하되, 배포용 prebuilt Release 폴더는 추적 (LFS)
+build/*
+!build/Release/
 external/
 captured_debug.ppm
